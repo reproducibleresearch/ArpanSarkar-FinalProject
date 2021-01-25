@@ -1,0 +1,169 @@
+---
+title: "BST270_final"
+author: "Arpan Sarkar"
+date: "1/20/2021"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE,
+                      tidy.opts=list(width.cutoff=80))
+```
+
+# Overview
+
+In this project, I aim to reproduce the COVID-19 visualizations and tables published by the New York Times. Specifically, I attempt to reproduce the following for January 17th, 2021:
+
+1. New cases as a function of time with a rolling average plot
+2. Table of cases, hospitalizations and deaths
+3. Table of cases by state
+
+# Load relevant packages
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(stringr)
+library(zoo)
+library(lubridate)
+library(kableExtra)
+```
+
+# Data
+
+Data for cases and deaths can be downloaded from this NYT GitHub repository (see us-counties.csv and us.csv). Data for hospitalizations can be downloaded from The COVID Tracking Project (see all-states-history.csv).
+
+```{r}
+states <- read.csv("Data/all-states-history.csv")
+us <- read.csv("Data/us.csv")
+us_s <- read.csv("Data/us-states.csv")
+```
+
+# Figure 1: New cases as a function of time with a rolling average plot
+
+This figure features a graph of new Covid-19 cases per day with a rolling 7-day average plot of new Covid-19 cases.
+
+As presented in the us.csv data, cases are cumulative, so it is necessary to create a new column with values for new cases for each recorded day.
+
+```{r}
+us$new_cases <- us$cases - lag(us$cases)
+us$new_cases_7dayavg = rollmean(us$new_cases, k = 7, fill = NA,align="right")
+```
+
+In order to recreate the x-axis of the NYT figure more faithfully, I format the date column by month.
+
+```{r}
+us$date <- ymd(us$date)
+us$month <- format(us$date,"%B")
+```
+
+The plot itself is created as follows:
+
+```{r}
+plot <- ggplot(us, aes(date, new_cases)) + geom_col(aes(date, new_cases),color="lightpink1",alpha=0.8) +
+  geom_path(aes(date,new_cases_7dayavg),color="darkred") +
+  scale_y_continuous(breaks = c(0, 100000, 200000, 300000), labels = c("0", "100,000", "200,000", "300,000"))+
+  xlab("Date")+
+  ylab("Cases")
+print(plot)
+```
+
+**Notes on Reproducibility:** This honestly seemed pretty clear from the figure provided in the problem specifications. It was clear that we were using new cases and the 7-day averages were fairly clear.
+
+
+# Figure 2: Table of cases, hospitalizations and deaths
+
+This figure features a table with total reported Covid-19 cases, total reported Covid-19 deaths, new recorded Covid-19 cases on Jan. 17th, new recorded Covid-19 deaths on Jan. 17th, Covid-19 hospitalizations on Jan. 17th, 14-day change for Covid-19 cases, 14-day change for Covid-19 deaths, and 14-day change for Covid-19 hospitalizations. 
+
+The total reported Covid-19 cases and Covid-19 deaths as of Jan. 17th are present in the original (un-modified) us.csv data set, and the number of current hospitalizations as of Jan. 17th is present in the original all-states-history.csv dataset. The new recorded Covid-19 cases on Jan. 17th was calculated in the process of generating Figure 1. The new recorded Covid-19 deaths on Jan. 17th can be calculated in a similar process:
+
+```{r}
+us$new_deaths  <- us$deaths - lag(us$deaths)
+us$new_deaths_7dayavg = rollmean(us$new_deaths, k = 7, fill = NA, align="right")
+```
+
+In order to determine the 14-day changes (in percent), the values new cases, deaths, and current hospitalizations must be recorded for Jan. 3rd and Jan 17th. (14 days prior).
+
+```{r}
+Jan3_cd <- us[us$date == "2021-01-03",]
+Jan17_cd <- us[us$date == "2021-01-17",]
+```
+
+The current hospitalizations should be grouped by date since otherwise the values provided are for each individual state/territory on any given day.
+
+```{r}
+total_hospitalizedCurrently = states %>%
+  group_by(date) %>%
+  summarize(totalnew_hosps = sum(hospitalizedCurrently, na.rm=T)) 
+total_hospitalizedCurrently$date <- rev(unique(states$date))
+```
+
+Calculations of 14-day percent changes of new cases, deaths, and current hospitalizations. It is important to note that this uses 7-day averages for the calculations.
+
+
+```{r}
+total_hospitalizedCurrently$totalnew_hosps_7dayavg <- rollmean(total_hospitalizedCurrently$totalnew_hosps, k = 7, fill = NA, align = "right")
+Jan3_hosp <- total_hospitalizedCurrently[total_hospitalizedCurrently$date == "2021-01-03",]
+Jan17_hosp <- total_hospitalizedCurrently[total_hospitalizedCurrently$date == "2021-01-17",]
+```
+
+
+```{r}
+cases_change <- (Jan17_cd$new_cases_7dayavg - Jan3_cd$new_cases_7dayavg)/Jan3_cd$new_cases_7dayavg * 100
+deaths_change <- (Jan17_cd$new_deaths_7dayavg - Jan3_cd$new_deaths_7dayavg)/Jan3_cd$new_deaths_7dayavg * 100
+hosp_change <- (Jan17_hosp$totalnew_hosps_7dayavg - Jan3_hosp$totalnew_hosps_7dayavg)/Jan3_hosp$totalnew_hosps_7dayavg * 100
+```
+
+Completing the table:
+
+```{r}
+Cases <- round(c(Jan17_cd$cases,Jan17_cd$new_cases, cases_change),digits=0)
+Deaths <- round(c(Jan17_cd$deaths, Jan17_cd$new_deaths, deaths_change),digits=0)
+Hospitalized <- c("",round(Jan17_hosp$totalnew_hosps,digits=0),round(hosp_change,digits=0))
+table <- as.matrix(rbind(Cases, Deaths, Hospitalized))
+colnames(table) <- c("TOTAL REPORTED","ON JAN 17", "14-DAY CHANGE")
+kable(table,digits=2)
+```
+
+**Notes on Reproducibility:** This also seemed pretty clear from the figure provided in the problem specifications. It was not immediately obvious to me that there was a gray caption under the table that details that the 14-day changes uses 7-day averages.
+
+# Figure 3: Table of cases by state
+
+This figure features a table with the total Covid-19 cases and daily average in the last 7 days of Covid-19 cases grouped by state.
+
+It is necessary to compute the new cases for each state (we already did this for us.csv, but it did not have the state labels).
+
+```{r}
+us_s <- us_s %>%
+  group_by(state) %>%
+  arrange(date) %>%
+  mutate(new_cases = cases - lag(cases))
+```
+
+Again, the rolling 7-day averages should be computed.
+
+```{r}
+us_s <- us_s %>% 
+  group_by(state) %>% 
+  mutate(new_cases_7dayavg = rollmean(new_cases, k = 7, fill = NA, align = "right"))
+```
+
+Only select the data for Jan. 17th.
+
+```{r}
+Jan17_3 <- us_s[us_s$date=="2021-01-17",c("state","cases","new_cases_7dayavg")]
+names(Jan17_3) <- c("State","Total Cases", "Daily Avg in Last 7 Days")
+Jan17_3$`Daily Avg in Last 7 Days` <- round(Jan17_3$`Daily Avg in Last 7 Days`)
+```
+
+Completing the table:
+
+```{r}
+options(scipen=999)
+kable(Jan17_3)
+```
+
+**Notes on Reproducibility:** This third figure also seemed pretty clear from the figure provided in the problem specifications. This was perhaps the easiest of the figures to reproduce.
